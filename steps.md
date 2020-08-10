@@ -112,3 +112,106 @@ https://medium.com/@awkwardferny/configuring-certificate-based-mutual-authentica
 ## Interesting tools I found along the way
 https://github.com/smallstep/cli#installing
 
+
+### Without an ingress controller
+
+#### ExternalDNS
+
+With an ingress controller, we can route all requests through it so only one A record was needed with the DNS server. If we want to expose each service directly, it would be helpful to automate the whole thing with [ExternalDNS](https://github.com/kubernetes-sigs/external-dns).
+
+Following [guide with GKE](https://github.com/kubernetes-sigs/external-dns/blob/master/docs/tutorials/gke.md)
+
+1. Setting up DNS zone on google cloud (Skip this in the demo):
+
+```bash
+gcloud dns managed-zones create "animal-rescue-zone" \
+    --dns-name "spring.animalrescue.online." \
+    --description "Automatically managed zone by kubernetes.io/external-dns"
+```
+
+Tell the parent zone where to find the DNS records for this zone by adding the corresponding NS records there.
+
+1. See records in the DNS zone:
+
+```bash
+gcloud dns record-sets list --zone "animal-rescue-zone"
+```
+
+1. Create service account and add secret
+
+Skip this step if the cluster is in the with the same provider of the DNS. Following [this doc](https://knative.dev/docs/serving/using-external-dns-on-gcp/#set-up-externaldns)
+
+```bash
+# # Name of the service account you want to create.
+export CLOUD_DNS_SA=cloud-dns-admin
+
+# Create a new service account for Cloud DNS admin role.
+gcloud --project $PROJECT_NAME iam service-accounts \
+    create $CLOUD_DNS_SA \
+    --display-name "Service Account to support ACME DNS-01 challenge."
+
+# Fully-qualified service account name also has project-id information.
+export CLOUD_DNS_SA=$CLOUD_DNS_SA@$PROJECT_NAME.iam.gserviceaccount.com
+
+# Bind the role dns.admin to the newly created service account.
+gcloud projects add-iam-policy-binding $PROJECT_NAME \
+    --member serviceAccount:$CLOUD_DNS_SA \
+    --role roles/dns.admin
+
+# Download the secret key file for your service account.
+gcloud iam service-accounts keys create ~/key.json \
+    --iam-account=$CLOUD_DNS_SA
+
+# Upload the service account credential to your cluster. This command uses the secret name cloud-dns-key, but you can choose a different name.
+kubectl create secret generic cloud-dns-key \
+    --from-file=key.json=$HOME/key.json
+
+# Delete the local secret
+rm ~/key.json
+```
+
+1. Deploy ExternalDNS
+
+```bash
+kubectl apply -f external-dns-manifest.yaml
+```
+
+1. Update the service to be `LoadBalancer` with the `external-dns.alpha.kubernetes.io/hostname` annotation
+
+```bash
+kubectl apply -f echo1.yaml
+kubectl apply -f echo2.yaml
+```
+
+1. PKS-DNS
+
+https://code.vmware.com/samples/6164/pks-dns---Automated-DNS-creation-for-PKS-clusters#:~:text=What%20Is%20This%3F,to%20access%20their%20cluster%20externally.
+https://neonmirrors.net/post/2019-08/pks-dns/
+
+#### Manage TLS
+
+https://kubernetes.io/docs/tasks/tls/managing-tls-in-a-cluster/
+
+1. Microsoft Open service mesh
+
+https://techcrunch.com/2020/08/05/microsoft-launches-open-service-mesh/
+
+1. AWS TLS support
+
+https://kubernetes.io/docs/concepts/services-networking/service/#ssl-support-on-aws
+
+1. step
+
+https://github.com/smallstep/cli#installing
+
+1. Manual mTLS
+
+https://medium.com/@awkwardferny/configuring-certificate-based-mutual-authentication-with-kubernetes-ingress-nginx-20e7e38fdfca
+
+1. Contour with CertManager
+
+https://projectcontour.io/guides/cert-manager/
+
+1. Digitalocean
+
+https://www.digitalocean.com/community/tutorials/how-to-set-up-an-nginx-ingress-with-cert-manager-on-digitalocean-kubernetes
