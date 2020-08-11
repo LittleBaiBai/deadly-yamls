@@ -3,13 +3,19 @@ kind: Ingress
 metadata:
   name: echo-ingress
   annotations:
+    # kubernetes.io/ingress.class: "nginx"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # Private CA
     kubernetes.io/ingress.class: "nginx"
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    cert-manager.io/cluster-issuer: "private-ca-issuer"
+    # For TLS termination
+    # nginx.ingress.kubernetes.io/auth-tls-verify-client: \"on\"
+    nginx.ingress.kubernetes.io/auth-tls-secret: \"default/my-certs\"
 spec:
   tls:
   - hosts:
     - animalrescue.online
-    secretName: echo-tls
+    secretName: my-certs
   rules:
   - host: animalrescue.online
     http:
