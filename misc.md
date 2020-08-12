@@ -215,3 +215,7 @@ https://projectcontour.io/guides/cert-manager/
 1. Digitalocean
 
 https://www.digitalocean.com/community/tutorials/how-to-set-up-an-nginx-ingress-with-cert-manager-on-digitalocean-kubernetes
+
+1. gcloud set up firewall rule for linkerd
+
+https://linkerd.io/2/reference/cluster-configuration/#private-clusters

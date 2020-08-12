@@ -159,10 +159,155 @@ curl https://animalrescue.online/echo1 --cert ./certs/client.crt --key ./certs/c
 
 The certificate request stayed as `in progress` after a very long time, and I'm getting `403` no matter how I make the request. This is not going to work.
 
-### Linkerd
-
-https://linkerd.io/
-
 ### With Autocert
 
-https://github.com/smallstep/autocert
+[Doc](https://github.com/smallstep/autocert)
+
+1. Make sure the cluster is kubernetes 1.9 or later with admission webhooks enabled
+
+```bash
+$ kubectl version --short
+Client Version: v1.16.6-beta.0
+Server Version: v1.16.12+vmware.1
+$ kubectl api-versions | grep "admissionregistration.k8s.io/v1beta1"
+admissionregistration.k8s.io/v1beta1
+```
+
+1. Install
+
+```bash
+kubectl run autocert-init -it --rm --image smallstep/autocert-init --restart Never
+```
+
+or with Helm:
+
+```bash
+helm repo add smallstep https://smallstep.github.io/helm-charts/
+helm install smallstep/autocert
+```
+
+Store installation info:
+
+```bash
+Store this information somewhere safe:
+  CA & admin provisioner password: I6C7f4Iku446iqmPkhsZNMyVdjjnY198
+  Autocert password: HMM0seFbhRKwsR38FPXLSfqpXUOTijJM
+  CA Fingerprint: e477129c307aaf55024d5b30e03dbe2997c3775016bc7a9091fce6ffac7125e2
+```
+
+1. Enable for the namespace
+
+To label the default namespace run:
+
+```bash
+kubectl label namespace default autocert.step.sm=enabled
+```
+
+To check which namespaces have autocert enabled run:
+
+```bash
+$ kubectl get namespace -L autocert.step.sm
+NAME          STATUS   AGE   AUTOCERT.STEP.SM
+default       Active   59m   enabled
+```
+
+1. Deploy a mtls server
+
+```bash
+kubectl apply -f hello-mtls.yaml
+```
+
+Verify cert is created and injected:
+
+```bash
+$ export HELLO_MTLS=$(kubectl get pods -l app=hello-mtls -o jsonpath='{$.items[0].metadata.name}')
+$ kubectl exec -it $HELLO_MTLS -c hello-mtls -- ls /var/run/autocert.step.sm
+root.crt  site.crt  site.key
+$ kubectl exec -it $HELLO_MTLS -c hello-mtls -- cat /var/run/autocert.step.sm/site.crt | step certificate inspect --short -
+```
+
+1. Deploy a mtls client
+
+```bash
+kubectl apply -f hello-mtls-client.yaml
+```
+
+Verify it works in the logs
+
+```bash
+stern hello-mtls-client
+```
+
+```bash
+$ export HELLO_MTLS_CLIENT=$(kubectl get pods -l app=hello-mtls-client -o jsonpath='{$.items[0].metadata.name}')
+$ kubectl exec $HELLO_MTLS_CLIENT -c hello-mtls-client -- curl -sS \
+       --cacert /var/run/autocert.step.sm/root.crt \
+       --cert /var/run/autocert.step.sm/site.crt \
+       --key /var/run/autocert.step.sm/site.key \
+       https://hello-mtls.default.svc.cluster.local
+Hello, hello-mtls-client.default.pod.cluster.local!
+```
+
+[How it works](https://github.com/smallstep/autocert#how-it-works)
+
+**Pros:**
+
+- Private keys are kept on container disk only and are never stored in Kubernetes secrets - which may not be encrypted in the storage backend - or transferred over the network
+- Easy to set up and run
+
+**Cons:**
+
+- Autocert works really well if the applications already knows how to load certificate and keys, how to periodically reload them, and how to do TLS termination. But this may not be the case most of the times, especially with Java where SSL/TLS can be expensive. In cases like these, it may be beneficial to offload TLS termination to a local proxy.
+
+### Linkerd
+
+[doc](https://linkerd.io/)
+
+1. Install CLI
+
+```bash
+brew install linkerd
+linkerd version
+linkerd check --pre
+```
+
+1. Install linkerd control plane
+
+```bash
+linkerd install | kubectl apply -f -
+linkerd check # This command waits for installatiion to finish
+linkerd -n linkerd top deploy/linkerd-web # view what's been installed
+```
+
+1. Deploy demo app
+
+```bash
+curl -sL https://run.linkerd.io/emojivoto.yml | kubectl apply -f -
+kubectl -n emojivoto port-forward svc/web-svc 8080:80
+```
+
+1. Inject linkerd
+
+```bash
+kubectl get -n emojivoto deploy -o yaml \
+  | linkerd inject - \
+  | kubectl apply -f -
+```
+
+This command retrieves all of the deployments running in the emojivoto namespace, runs the manifest through linkerd inject, and then reapplies it to the cluster. The linkerd inject command adds annotations to the pod spec instructing Linkerd to add (“inject”) the proxy as a container to the pod spec.
+
+1. Verify
+
+```bash
+linkerd -n emojivoto check --proxy
+```
+
+**Pros:**
+
+- Automatic mTLS
+- CLI to simplify annotations
+
+**Cons:**
+
+- Maybe too feature rich? (Built in Grafana and dashboard)
+- Doesn't enforce mTLS

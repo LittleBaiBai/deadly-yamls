@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: hello-mtls-client, labels: {app: hello-mtls-client}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: hello-mtls-client}}
+  template:
+    metadata:
+      annotations:
+        # AUTOCERT ANNOTATION HERE -v ######################################
+        autocert.step.sm/name: hello-mtls-client.default.pod.cluster.local #
+        # AUTOCERT ANNOTATION HERE -^ ######################################
+      labels: {app: hello-mtls-client}
+    spec:
+      containers:
+      - name: hello-mtls-client
+        image: smallstep/hello-mtls-client-curl:latest
+        env: [{name: HELLO_MTLS_URL, value: https://hello-mtls.default.svc.cluster.local}]
