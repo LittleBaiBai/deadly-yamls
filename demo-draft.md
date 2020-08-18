@@ -1,4 +1,50 @@
-# Certs
+# Demo draft
+
+## Basic Auth on API
+
+### Without auth
+
+Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
+
+### Manual secret creation
+
+1. Create secret
+
+    ```bash
+    kubectl create secret generic animal-rescue-basic --from-literal=username=alice  --from-literal=password=test
+    ```
+
+1. Use the secret in the container, use `basic` profile
+
+    ```bash
+    env:
+      - name: SPRING_PROFIELS_ACTIVE
+        value: basic
+      - name: ANIMAL_RESCUE_SECURITY_BASIC_PASSWORD
+        valueFrom:
+          secretKeyRef:
+            name: animal-rescue-basic
+            key: password
+      - name: ANIMAL_RESCUE_SECURITY_BASIC_USERNAME
+        valueFrom:
+          secretKeyRef:
+            name: animal-rescue-basic
+            key: username
+    ```
+
+1. Deploy and verify basic auth working with the app
+
+1. Another API use the same secret to access `/api/animals` endpoint
+
+### Generated secret
+
+### ingress + basic auth
+
+https://kubernetes.github.io/ingress-nginx/examples/auth/basic/
+
+### Traefik
+
+https://docs.traefik.io/middlewares/basicauth/
 
 ## Exposing trustworthy service to the world
 
@@ -6,7 +52,7 @@
 
 #### Install Nginx with Helm
 
-https://kubernetes.github.io/ingress-nginx/deploy/
+[ingress-nginx doc](https://kubernetes.github.io/ingress-nginx/deploy/)
 
 ```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
@@ -46,7 +92,7 @@ kubectl describe certificate -n cert-manager-test
 kubectl delete -f test-resources.yaml
 ```
 
-More info about the chart: https://github.com/helm/charts/tree/master/stable/cert-manager
+[More info about the chart](https://github.com/helm/charts/tree/master/stable/cert-manager)
 
 #### Enable TLS
 
@@ -99,7 +145,7 @@ curl https://animalrescue.online/echo1 # SHould get `echo1` back
 
 ### With Traefik
 
-https://containo.us/traefik/
+[Doc](https://containo.us/traefik/)
 
 ## Service to service
 
