@@ -38,6 +38,18 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
 
 ### Generated secret
 
+[[Demo here needs more work]]
+
+```yaml
+secretGenerator:
+- name: animal-rescue-basic
+  type: Opaque
+  envs:
+  - secret.env
+```
+
+Insert pros and cons here.
+
 ### ingress + basic auth
 
 https://kubernetes.github.io/ingress-nginx/examples/auth/basic/
@@ -56,13 +68,22 @@ https://docs.traefik.io/middlewares/basicauth/
 
 ```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm install my-release ingress-nginx/ingress-nginx
+helm install animal-rescue-ingress ingress-nginx/ingress-nginx
 ```
 
-#### Deploy an app
+#### Add DNS record for ingress
 
-kubectl apply -f echo1.yaml
-kubectl apply -f echo2.yaml
+Quickly mention [ExternalDNS](https://github.com/kubernetes-sigs/external-dns)
+
+Then do it manually:
+
+```bash
+gcloud dns record-sets list --zone "animal-rescue-zone"
+
+```
+
+#### Create an ingress for animal-rescue
+
 kubectl apply -f echo-ingress.yaml
 
 At this point the ingress should be configured correctly. Verify with:
