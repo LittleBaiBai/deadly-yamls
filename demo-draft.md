@@ -36,20 +36,6 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
 
 1. Another API use the same secret to access `/api/animals` endpoint
 
-### Generated secret
-
-[[Demo here needs more work]]
-
-```yaml
-secretGenerator:
-- name: animal-rescue-basic
-  type: Opaque
-  envs:
-  - secret.env
-```
-
-Insert pros and cons here.
-
 ### ingress + basic auth
 
 To remove the need to restart all the pods or to watch for secrets change, use [ingress](https://kubernetes.github.io/ingress-nginx/examples/auth/basic/)
@@ -106,6 +92,14 @@ Make sure to run the following command after `helm uninstall`
 kubectl delete -A ValidatingWebhookConfiguration ingress-s1p-ingress-nginx-admission
 ```
 
+_Note for ourselves: Because this is deployed on GKE, so I had to run the following commmand to enable webhook._
+
+```bash
+kubectl create clusterrolebinding cluster-admin-binding \
+  --clusterrole cluster-admin \
+  --user $(gcloud config get-value account)
+```
+
 #### Create secret
 
 ```bash
@@ -137,8 +131,8 @@ secretGenerator:
 
 #### Remove all basic auth reference in code
 
-`backend/k8s/deployment.yaml` - remove env vars including profiles
-`external-api/k8s/deployment.yaml` - remove basic auth envs
+`backend/k8s/deployment.yaml` - Remove env vars including profiles
+`external-api/k8s/deployment.yaml` - Remove basic auth envs
 `external-api/server.js` - Remove reading basic auth envs and `auth` option when making the request.
 
 #### Create ingress
@@ -150,11 +144,11 @@ ${ingressIP} spring.animalrescue.online
 ${ingressIP} partner.spring.animalrescue.online
 ```
 
+#### Talk about services no longer need to be loadbalanced
+
 #### Verify it works
 
 Visit `spring.animalrescue.online` and `partner.spring.animalrescue.online`
-
-#### Services no longer need to be loadbalanced
 
 ## Exposing trustworthy service to the world
 
@@ -167,20 +161,44 @@ Quickly mention [ExternalDNS](https://github.com/kubernetes-sigs/external-dns)
 Then do it manually:
 
 ```bash
+# List existing records
 gcloud dns record-sets list --zone "animal-rescue-zone"
 
+# Get ingress IP
+set ingressIp (kubectl get ingress -o json | jq -r .items[0].status.loadBalancer.ingress[0].ip) # Fish syntax, use export in bash
+
+# Add new record
+gcloud dns record-sets transaction start --zone="animal-rescue-zone"
+gcloud dns record-sets transaction add $ingressIp \
+  --name="spring.animalrescue.online" \
+  --ttl="30" \
+  --type="A" \
+  --zone="animal-rescue-zone"
+gcloud dns record-sets transaction add $ingressIp \
+  --name="partner.spring.animalrescue.online" \
+  --ttl="30" \
+  --type="A" \
+  --zone="animal-rescue-zone"
+gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
+
+# Remove record
+gcloud dns record-sets transaction start --zone="animal-rescue-zone"
+gcloud dns record-sets transaction remove $ingressIp \
+  --name="spring.animalrescue.online" \
+  --ttl="30" \
+  --type="A" \
+  --zone="animal-rescue-zone"
+gcloud dns record-sets transaction remove $ingressIp \
+  --name="partner.spring.animalrescue.online" \
+  --ttl="30" \
+  --type="A" \
+  --zone="animal-rescue-zone"
+gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
 ```
 
-#### Create an ingress for animal-rescue
+#### Switch to use the preconfigured ingress
 
-kubectl apply -f echo-ingress.yaml
-
-At this point the ingress should be configured correctly. Verify with:
-
-```bash
-curl spring.animalrescue.online/echo1 // Should get 'echo1'
-curl spring.animalrescue.online/echo2 // Should get 'echo2'
-```
+Update the settings so we keep the IP.
 
 #### Install CertManager with Helm
 
