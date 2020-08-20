@@ -18,7 +18,7 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
 
     ```bash
     env:
-      - name: SPRING_PROFIELS_ACTIVE
+      - name: SPRING_PROFILES_ACTIVE
         value: basic
       - name: ANIMAL_RESCUE_SECURITY_BASIC_PASSWORD
         valueFrom:
@@ -52,15 +52,11 @@ Insert pros and cons here.
 
 ### ingress + basic auth
 
-https://kubernetes.github.io/ingress-nginx/examples/auth/basic/
+To remove the need to restart all the pods or to watch for secrets change, use [ingress](https://kubernetes.github.io/ingress-nginx/examples/auth/basic/)
 
-### Traefik
+#### Remove basic auth from the applications
 
-https://docs.traefik.io/middlewares/basicauth/
-
-## Exposing trustworthy service to the world
-
-### With Ingress + Cert Manager
+Remove the envs from `backend/k8s/deployment.yaml`
 
 #### Install Nginx with Helm
 
@@ -68,8 +64,101 @@ https://docs.traefik.io/middlewares/basicauth/
 
 ```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm install animal-rescue-ingress ingress-nginx/ingress-nginx
+kubectl create namespace nginx
+helm install ingress-s1p -n nginx ingress-nginx/ingress-nginx
 ```
+
+It outputs an example ingress. Create an `animal-rescue-ingress.yaml` file with that content, add backend for both apps, and remove the tls part for now. It will look like this:
+
+```yaml
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  name: animal-rescue-ingress
+  namespace: animal-rescue
+spec:
+  rules:
+    - host: spring.animalrescue.online
+      http:
+        paths:
+          - backend:
+              serviceName: animal-rescue
+              servicePort: 80
+    - host: partner.spring.animalrescue.online
+      http:
+        paths:
+          - backend:
+              serviceName: partner-adoption-center
+              servicePort: 80
+```
+
+Run the recommended command from the output to start waiting on external IP.
+
+```bash
+kubectl --namespace nginx get services -o wide -w ingress-s1p-ingress-nginx-controller
+```
+
+Make sure to run the following command after `helm uninstall`
+
+```bash
+kubectl delete -A ValidatingWebhookConfiguration ingress-s1p-ingress-nginx-admission
+```
+
+#### Create secret
+
+```bash
+htpasswd -c auth alice # Password is MD5 encrypted by default
+cat auth # Relatively safe to version control it with a private repo?
+kubectl create secret generic ingress-basic-auth --from-file=auth
+kubectl get secret ingress-basic-auth -o yaml
+```
+
+Alternatively, create service with `secretGenerator`:
+
+```yaml
+secretGenerator:
+- name: ingress-basic-auth
+  type: Opaque
+  files:
+  - auth
+```
+
+#### Add basic auth annotation to ingress
+
+```yaml
+  annotations:
+    # type of authentication
+    nginx.ingress.kubernetes.io/auth-type: basic
+    # name of the secret that contains the user/password definitions
+    nginx.ingress.kubernetes.io/auth-secret: ingress-basic-auth
+```
+
+#### Remove all basic auth reference in code
+
+`backend/k8s/deployment.yaml` - remove env vars including profiles
+`external-api/k8s/deployment.yaml` - remove basic auth envs
+`external-api/server.js` - Remove reading basic auth envs and `auth` option when making the request.
+
+#### Create ingress
+
+Update skaffold to include the ingress yaml, add DNS entries for to `/etc/hosts`:
+
+```text
+${ingressIP} spring.animalrescue.online
+${ingressIP} partner.spring.animalrescue.online
+```
+
+#### Verify it works
+
+Visit `spring.animalrescue.online` and `partner.spring.animalrescue.online`
+
+#### Services no longer need to be loadbalanced
+
+## Exposing trustworthy service to the world
+
+### With Ingress + Cert Manager
 
 #### Add DNS record for ingress
 
@@ -325,6 +414,20 @@ Hello, hello-mtls-client.default.pod.cluster.local!
 **Cons:**
 
 - Autocert works really well if the applications already knows how to load certificate and keys, how to periodically reload them, and how to do TLS termination. But this may not be the case most of the times, especially with Java where SSL/TLS can be expensive. In cases like these, it may be beneficial to offload TLS termination to a local proxy.
+
+### With a mesh (TSM?)
+
+## Other products
+
+### Istio
+
+### Traefik
+
+[Basic Auth](https://docs.traefik.io/middlewares/basicauth/)
+
+[TLS](https://docs.traefik.io/https/tls/)
+
+[mTLS](https://docs.traefik.io/https/tls/#client-authentication-mtls)
 
 ### Linkerd
 
