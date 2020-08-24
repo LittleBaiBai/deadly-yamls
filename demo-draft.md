@@ -35,6 +35,7 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
 1. Deploy and verify basic auth working with the app
 1. Show 401 accessing the API
 1. Add basic auth configuration to external API deployment
+
 ```yaml
           - name: ANIMAL_RESCUE_PASSWORD
             valueFrom:
@@ -49,25 +50,16 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
 ```
 
 1. Edit server.js to use basic auth from secret
-```js
-const animalRescueBaseUrl = process.env.ANIMAL_RESCUE_BASE_URL
-const animalRescueUsername = process.env.ANIMAL_RESCUE_USERNAME
-const animalRescuePassword = process.env.ANIMAL_RESCUE_PASSWORD
 
-const requestAnimalsFromAnimalRescue = async () => {
-    try {
-        const response = await axios.get(`${animalRescueBaseUrl}/api/animals`, {
-            auth: {
-                username: animalRescueUsername,
-                password: animalRescuePassword
-            }
-        });
-        return response.data;
-    } catch (e) {
-        console.error(e);
+```js
+const response = await axios.get(`${animalRescueBaseUrl}/api/animals`, {
+    auth: {
+        username: animalRescueUsername,
+        password: animalRescuePassword
     }
-}
+});
 ```
+
 1. Another API use the same secret to access `/api/animals` endpoint
 
 ### ingress + basic auth
@@ -120,7 +112,7 @@ Run the recommended command from the output to start waiting on external IP.
 kubectl --namespace nginx get services -o wide -w ingress-s1p-ingress-nginx-controller
 ```
 
-Make sure to run the following command after `helm uninstall`
+_Note for ourselves: Make sure to run the following command after `helm uninstall`_
 
 ```bash
 kubectl delete -A ValidatingWebhookConfiguration ingress-s1p-ingress-nginx-admission
@@ -185,6 +177,7 @@ ${ingressIP} partner.spring.animalrescue.online
 Visit `spring.animalrescue.online` and `partner.spring.animalrescue.online`
 
 #### ingress-nginx plugin
+
 the `krew` plugin manager for `kubectl` can be used to install the `ingress-nginx` plugin. This makes it easier to monitor the ingress
 
 `kubectl krew install ingress-nginx`
@@ -192,21 +185,75 @@ the `krew` plugin manager for `kubectl` can be used to install the `ingress-ngin
 `kubectl ingress-nginx backends -n nginx`
 
 #### Secrets limitations
+
 Secrets still have some limitations, in practice a `kubeclt` user will have access to all the secrets in a namespace they have access to.
-Kubernetes does have Role Based Access Control (RBAC) however these are not fine-grained enough to grant or deny access to specific secrets 
-(although you can limit which users have access to *any* secrets in a namespace). Using the below command, we can read the basic authentication MD5 previously 
+Kubernetes does have Role Based Access Control (RBAC) however these are not fine-grained enough to grant or deny access to specific secrets
+(although you can limit which users have access to *any* secrets in a namespace). Using the below command, we can read the basic authentication MD5 previously
 created)
 
 `kubectl get secrets ingress-basic-auth-XXXXX -o json | jq -r '.data.auth' | base64 -d`
 `alice:$apr1$nrfZ.qd2$E8x2.pi2q7Aa6ewFZ9XtS1`
 
-The password is still MD5 hashed, offering some protection but more secure environments may want to use an external secret manager to inject 
+The password is still MD5 hashed, offering some protection but more secure environments may want to use an external secret manager to inject
 secrets into Pods, such as HashiCorp Vault
-
 
 ## Exposing trustworthy service to the world
 
 ### With Ingress + Cert Manager
+
+#### Install CertManager with Helm
+
+```bash
+kubectl create namespace cert-manager
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+helm install cert-manager jetstack/cert-manager \
+    --namespace cert-manager \
+    --version v0.16.1 \
+    --set installCRDs=true
+```
+
+[More info about the chart](https://github.com/helm/charts/tree/master/stable/cert-manager)
+
+_Note for ourselves: steps to uninstall certmanager:_
+
+```bash
+helm --namespace cert-manager delete cert-manager
+kubectl delete namespace cert-manager
+kubectl delete -f https://github.com/jetstack/cert-manager/releases/download/v0.16.1/cert-manager.crds.yaml
+
+# If namespace stuck in terminating state
+kubectl delete apiservice v1beta1.webhook.cert-manager.io
+```
+
+#### Create staging yaml
+
+From the output of Helm install, we know we need to set up a ClusterIssuer to begin issuing certificates.
+
+Click on the hyperlink, quickly show what's possible with certmanager:
+
+- Self signed cert - use this to test webhook
+
+    ```bash
+    k apply -f k8s/test-issuer-for-certmanager.yaml
+    kubectl describe certificate -n cert-manager-test
+    kubectl delete -f k8s/test-issuer-for-certmanager.yaml
+    ```
+
+- CA - This issuer type is typically used in a Public Key Infrastructure (PKI) setup to secure your infrastructure components to establish mTLS or otherwise provide a means to issue certificates where you also own the private key.
+
+- ACME - The ACME Issuer type represents a single account registered with the Automated Certificate Management Environment (ACME) Certificate Authority server.
+
+Then go to the ACME section and copy the yaml into `letsencrypt.yaml`
+
+- `staging` -> `prod` in the file. It's normally recommended to verify your configuration is working before using the prod server because there is rate limit on the prod server. But out of blind confidence and for time sake, we will skip that bit in this demo.
+- email: `spring-cloud-services@pivotal.io`
+- `privateKeySecretRef`: `letsencrypt-prod`. This private key is used to store the ACME/Let's Encrypt account private key, not the private key used for any Certificate resources. The account private key identifies your company/you as a user of the ACME service, and is used to sign all requests/communication with the ACME server to validate your identity.
+- `HTTP01` challenge: `HTTP01` is easy to automate to issue certificates for a domain that points to your web servers. ACME server will give the client a token and expect to find it at a certain path on your domain. And because if how it works, it doesn’t allow issueing wildcard certificates.
+- `DNS-01` challenge: you can issue certificates containing wildcard domain names with this, as long as you can provide a service account that can mange your domain.
+- server: `https://acme-v02.api.letsencrypt.org/directory` (Remove `staging` from the example url).
+
+[Additional information](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
 
 #### Add DNS record for ingress
 
@@ -250,56 +297,33 @@ gcloud dns record-sets transaction remove $ingressIp \
 gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
 ```
 
+It takes a few minutes for the DNS record getting propogated.
+
 #### Switch to use the preconfigured ingress
 
 Update the settings so we keep the IP.
-
-#### Install CertManager with Helm
-
-```bash
-kubectl create namespace cert-manager
-helm repo add jetstack https://charts.jetstack.io
-helm repo update
-helm install cert-manager jetstack/cert-manager \
-    --namespace cert-manager \
-    --version v0.16.1 \
-    --set installCRDs=true
-```
-
-Now verify webhook works find:
-
-```bash
-kubectl apply -f test-resources.yaml
-kubectl describe certificate -n cert-manager-test
-kubectl delete -f test-resources.yaml
-```
-
-[More info about the chart](https://github.com/helm/charts/tree/master/stable/cert-manager)
 
 #### Enable TLS
 
 Create ClusterIssuer with LetsEncrypt
 
-```bash
-kubectl apply -f letsencrypt-staging.yaml
-```
+Add the Let's Encrypt yaml file in `kustomization.yaml`
 
-Now configure ingress to perform TLS
+Now add the following annotation to ingress to use cert-manager:
 
-```bash
-kubectl apply -f echo-ingress-tls.yaml
-```
-
-Validate that we are getting a self-signed cert. Then we are ready to move onto prod and create a proper cert for the app.
-
-```bash
-kubectl apply -f letsencrypt-prod.yaml
-```
-
-Update `echo-ingress-tls.yaml` to use the prod server
-
-```bash
-kubectl apply -f echo-ingress-tls.yaml
+```yaml
+annotations:
+  # Additional to existing annotations
+  cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  kubernetes.io/tls-acme: "true"
+spec:
+  tls:
+    - hosts:
+        - spring.animalrescue.online
+      secretName: animal-rescue-certs
+    - hosts:
+        - partner.spring.animalrescue.online
+      secretName: partner-certs
 ```
 
 Wait until certificate is successfully issued:
@@ -321,13 +345,20 @@ Events:
 Verify TLS:
 
 ```bash
-curl http://animalrescue.online/echo1 # Should get `308 Permanent Redirect` back
-curl https://animalrescue.online/echo1 # SHould get `echo1` back
+curl http://spring.animalrescue.online/api/animals # Should get `308 Permanent Redirect` back
+curl https://spring.animalrescue.online/api/animals # Should get `401` back
+curl https://spring.animalrescue.online/api/animals --user alice:test # Should get `200`response back
 ```
 
-### With Traefik
+## OAuth2 integration
 
-[Doc](https://containo.us/traefik/)
+### Internal user access - cluster OIDC
+
+Ingress + oauth2-proxy
+
+### External user - external IDP
+
+Dex? Spring Authorization Server? Gateway?
 
 ## Service to service
 
@@ -489,7 +520,17 @@ Hello, hello-mtls-client.default.pod.cluster.local!
 
 ### With a mesh (TSM?)
 
+## Committing to Spring Boot
+
+### Spring Cloud Binding
+
+### Spring Cloud Kubernetes
+
 ## Other products
+
+Maybe a chart compare all of them side by side for features and usabilities?
+
+### TSM
 
 ### Istio
 

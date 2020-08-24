@@ -219,3 +219,7 @@ https://www.digitalocean.com/community/tutorials/how-to-set-up-an-nginx-ingress-
 1. gcloud set up firewall rule for linkerd
 
 https://linkerd.io/2/reference/cluster-configuration/#private-clusters
+
+1. Istio with wildcard certificates
+
+https://github.com/stefanprodan/istio-gke/blob/master/docs/istio/05-letsencrypt-setup.md
