@@ -33,7 +33,41 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
     ```
 
 1. Deploy and verify basic auth working with the app
+1. Show 401 accessing the API
+1. Add basic auth configuration to external API deployment
+```yaml
+          - name: ANIMAL_RESCUE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: animal-rescue-basic
+                key: password
+          - name: ANIMAL_RESCUE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: animal-rescue-basic
+                key: username
+```
 
+1. Edit server.js to use basic auth from secret
+```js
+const animalRescueBaseUrl = process.env.ANIMAL_RESCUE_BASE_URL
+const animalRescueUsername = process.env.ANIMAL_RESCUE_USERNAME
+const animalRescuePassword = process.env.ANIMAL_RESCUE_PASSWORD
+
+const requestAnimalsFromAnimalRescue = async () => {
+    try {
+        const response = await axios.get(`${animalRescueBaseUrl}/api/animals`, {
+            auth: {
+                username: animalRescueUsername,
+                password: animalRescuePassword
+            }
+        });
+        return response.data;
+    } catch (e) {
+        console.error(e);
+    }
+}
+```
 1. Another API use the same secret to access `/api/animals` endpoint
 
 ### ingress + basic auth
@@ -42,7 +76,7 @@ To remove the need to restart all the pods or to watch for secrets change, use [
 
 #### Remove basic auth from the applications
 
-Remove the envs from `backend/k8s/deployment.yaml`
+Revert to startdemo tag
 
 #### Install Nginx with Helm
 
@@ -149,6 +183,26 @@ ${ingressIP} partner.spring.animalrescue.online
 #### Verify it works
 
 Visit `spring.animalrescue.online` and `partner.spring.animalrescue.online`
+
+#### ingress-nginx plugin
+the `krew` plugin manager for `kubectl` can be used to install the `ingress-nginx` plugin. This makes it easier to monitor the ingress
+
+`kubectl krew install ingress-nginx`
+`kubectl ingress-nginx ingresses`
+`kubectl ingress-nginx backends -n nginx`
+
+#### Secrets limitations
+Secrets still have some limitations, in practice a `kubeclt` user will have access to all the secrets in a namespace they have access to.
+Kubernetes does have Role Based Access Control (RBAC) however these are not fine-grained enough to grant or deny access to specific secrets 
+(although you can limit which users have access to *any* secrets in a namespace). Using the below command, we can read the basic authentication MD5 previously 
+created)
+
+`kubectl get secrets ingress-basic-auth-XXXXX -o json | jq -r '.data.auth' | base64 -d`
+`alice:$apr1$nrfZ.qd2$E8x2.pi2q7Aa6ewFZ9XtS1`
+
+The password is still MD5 hashed, offering some protection but more secure environments may want to use an external secret manager to inject 
+secrets into Pods, such as HashiCorp Vault
+
 
 ## Exposing trustworthy service to the world
 
