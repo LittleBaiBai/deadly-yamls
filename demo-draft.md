@@ -3,6 +3,7 @@
 ## Basic Auth on API
 
 ### Without auth
+Generate k8s resources using code completion
 
 Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
 
@@ -31,7 +32,8 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
             name: animal-rescue-basic
             key: username
     ```
-
+1. Show `BasicAuthenticationSecurityConfiguration` and explain how env var gets mapped from `ANIMAL_RESCUE_SECURITY_BASIC` to `animal.rescue.security.basic` 
+1. Explain that the `basic` profile is activated using an env var in the deployment and that the profile is used to include the `BasicAuthenticationSecurityConfiguration` 
 1. Deploy and verify basic auth working with the app
 1. Show 401 accessing the API
 1. Add basic auth configuration to external API deployment
@@ -61,6 +63,7 @@ const response = await axios.get(`${animalRescueBaseUrl}/api/animals`, {
 ```
 
 1. Another API use the same secret to access `/api/animals` endpoint
+1. Change the secret and rolling restart
 
 ### ingress + basic auth
 
@@ -298,10 +301,8 @@ gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
 ```
 
 It takes a few minutes for the DNS record getting propogated.
-
-#### Switch to use the preconfigured ingress
-
-Update the settings so we keep the IP.
+//NOTE: We could create a wildcard DNS entry before the demo and use a static ip for the ingress. This will save us having
+//show how to create the DNS records or use external
 
 #### Enable TLS
 
@@ -354,8 +355,34 @@ curl https://spring.animalrescue.online/api/animals --user alice:test # Should g
 
 ### Internal user access - cluster OIDC
 
-Ingress + oauth2-proxy
+For internal facing applications, there is often a need to authenticate access to APIs using internal identity systems.
+Kubernetes can integrate the cluster security with an external identity provider using the Open ID Connect protocol (OIDC). 
+OIDC is an extension of the OAuth2 specification that provides some new authorization flows on top of the existing OAuth2 auth flows.
+Our applications can also use the clusters auth service as an authorization service. This should only be done for internal
+systems as it is not a good idea to store external user identities in the cluster.
 
+In this demo we are using Tanzu Kubernetes Grid integrated (TKGi) which uses UAA auth service. UAA was originally built
+for Cloud Foundry, it is a complete solution for user authentication and authorization. If you are using a different cluster,
+the process of authorization will similar as it uses the OIDC specification, however the steps for creating users will be different.
+
+We are going to use an `authorization_code` flow to protect access to our webpage. This flow will redirect users to a username / password
+form to enter their credentials, and then allow access to the original page.
+ 
+
+#### Create client and user
+```shell script
+uaa create-client animal-rescue \
+  --display_name AnimalRescueAuth \
+  --authorities "uaa.resource" \
+  --authorized_grant_types "authorization_code,refresh_token" \
+  --scope "resource.read,resource.write,openid,profile,email" \
+  --redirect_uri http://spring.animalrescue.online \
+  -s springone2020
+```
+The client will be used by our backend API server by Spring Security to authorize user access to the animal rescue web process.
+Typically, a client is created for each API. It is possible to authenticate to our API just using the client, however it is 
+considered best practice to create user accounts for each person that needs access to the API and only use the client in the API
+to validate the users access.  
 ### External user - external IDP
 
 Dex? Spring Authorization Server? Gateway?
@@ -519,78 +546,3 @@ Hello, hello-mtls-client.default.pod.cluster.local!
 - Autocert works really well if the applications already knows how to load certificate and keys, how to periodically reload them, and how to do TLS termination. But this may not be the case most of the times, especially with Java where SSL/TLS can be expensive. In cases like these, it may be beneficial to offload TLS termination to a local proxy.
 
 ### With a mesh (TSM?)
-
-## Committing to Spring Boot
-
-### Spring Cloud Binding
-
-### Spring Cloud Kubernetes
-
-## Other products
-
-Maybe a chart compare all of them side by side for features and usabilities?
-
-### TSM
-
-### Istio
-
-### Traefik
-
-[Basic Auth](https://docs.traefik.io/middlewares/basicauth/)
-
-[TLS](https://docs.traefik.io/https/tls/)
-
-[mTLS](https://docs.traefik.io/https/tls/#client-authentication-mtls)
-
-### Linkerd
-
-[doc](https://linkerd.io/)
-
-1. Install CLI
-
-```bash
-brew install linkerd
-linkerd version
-linkerd check --pre
-```
-
-1. Install linkerd control plane
-
-```bash
-linkerd install | kubectl apply -f -
-linkerd check # This command waits for installatiion to finish
-linkerd -n linkerd top deploy/linkerd-web # view what's been installed
-```
-
-1. Deploy demo app
-
-```bash
-curl -sL https://run.linkerd.io/emojivoto.yml | kubectl apply -f -
-kubectl -n emojivoto port-forward svc/web-svc 8080:80
-```
-
-1. Inject linkerd
-
-```bash
-kubectl get -n emojivoto deploy -o yaml \
-  | linkerd inject - \
-  | kubectl apply -f -
-```
-
-This command retrieves all of the deployments running in the emojivoto namespace, runs the manifest through linkerd inject, and then reapplies it to the cluster. The linkerd inject command adds annotations to the pod spec instructing Linkerd to add (“inject”) the proxy as a container to the pod spec.
-
-1. Verify
-
-```bash
-linkerd -n emojivoto check --proxy
-```
-
-**Pros:**
-
-- Automatic mTLS
-- CLI to simplify annotations
-
-**Cons:**
-
-- Maybe too feature rich? (Built in Grafana and dashboard)
-- Doesn't enforce mTLS
