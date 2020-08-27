@@ -1,0 +1,29 @@
+config:
+  existingSecret: oauth2-proxy-creds
+
+extraArgs:
+  whitelist-domain: .spring.animalrescue.online
+  cookie-domain: .spring.animalrescue.online
+  provider: github
+
+authenticatedEmailsFile:
+  enabled: true
+  restricted_access: |-
+    olli.hughes@gmail.com
+
+image:
+  tag: v6.0.0
+ingress:
+  enabled: true
+  path: /
+  hosts:
+  - auth.spring.animalrescue.online
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/issuer: gcloud-dns-issuer-1
+#    kubernetes.io/tls-acme: "true"
+#    acme.cert-manager.io/http01-edit-in-place: "true"
+  tls:
+  - secretName: oauth2-proxy-https-cert
+    hosts:
+    - auth.spring.animalrescue.online

@@ -256,6 +256,13 @@ Then go to the ACME section and copy the yaml into `letsencrypt.yaml`
 - `DNS-01` challenge: you can issue certificates containing wildcard domain names with this, as long as you can provide a service account that can mange your domain.
 - server: `https://acme-v02.api.letsencrypt.org/directory` (Remove `staging` from the example url).
 
+#### Google cloud DNS solver
+```shell script
+kubectl create secret generic clouddns-dns01-solver-svc-acct \
+   --from-file=$HOME/secret/gcp-key.json
+```
+
+
 [Additional information](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
 
 #### Add DNS record for ingress
@@ -354,6 +361,7 @@ curl https://spring.animalrescue.online/api/animals --user alice:test # Should g
 ## OAuth2 integration
 
 ### Internal user access - cluster OIDC
+!!PROBABLY GOING TO SCRATCH THIS. LEAVING HERE FOR NOW TO REUSE SOME OF THE WORDING!!
 
 For internal facing applications, there is often a need to authenticate access to APIs using internal identity systems.
 Kubernetes can integrate the cluster security with an external identity provider using the Open ID Connect protocol (OIDC). 
@@ -383,9 +391,69 @@ The client will be used by our backend API server by Spring Security to authoriz
 Typically, a client is created for each API. It is possible to authenticate to our API just using the client, however it is 
 considered best practice to create user accounts for each person that needs access to the API and only use the client in the API
 to validate the users access.  
+
 ### External user - external IDP
 
-Dex? Spring Authorization Server? Gateway?
+Ingress Nginx can be configured to provide a simple Single Sign On (SSO) for applications by forwarding authentication
+requests to an external service.
+
+We will install a simple OAuth2 proxy in the cluster that uses GitHub as a backend for authorization
+TODO: Update links to HTTPS
+
+#### Register a new application in GitHub
+1. Login to GitHub and go to settings | Developer Settings | New OAuth App
+1. Enter Animal Rescue for name, http://spring.animalrescue.online for homepage
+ and http://auth.spring.animalrescue.online/oauth2/callback for callback url
+1. Take a note of client ID and secret
+
+#### Deploy oauth2-proxy
+1. Generate random base64 string to be used for cookie secret
+ `python -c 'import os,base64; print(base64.urlsafe_b64encode(os.urandom(16)).decode())'`
+1. Create secrets for oauth2_proxy client_id, client_secret from GitHub app registration and the cookie secret
+```shell script
+    export COOKIE_SECRET=...
+    export GITHUB_CLIENT_ID=...
+    export GITHUB_CLIENT_SECRET=...
+    kubectl -n animal-rescue create secret generic oauth2-proxy-creds \
+    --from-literal=cookie-secret=${COOKIE_SECRET} \
+    --from-literal=client-id=${GITHUB_CLIENT_ID} \
+    --from-literal=client-secret=${GITHUB_CLIENT_SECRET}
+```
+Helm will be used to install `oauth2-proxy` as it provides a simple mechanism to override settings. These custom settings
+are stored in a file
+
+`cat oauth2-proxy-helm-values.yaml`
+
+With helm, we can also set these values individually using the `--set key=value` flag
+
+Helm will configure a deployment for oauth2-proxy and also an ingress. This is needed in order to configure TLS for the service using cert-manager.
+The TLS configuration process is the same as we did with the other 2 microservices earlier
+
+```shell script
+helm install oauth2-proxy stable/oauth2-proxy --values oauth2-proxy-helm-values.yaml
+```
+
+Watching the status of the pod will let us know when it is ready
+```shell script
+k get pod -l app=oauth2-proxy --watch
+```
+As before, we will need to create a DNS record for the auth service using the ingress IP
+
+```shell script
+export ingressIp =$(kubectl get ingress -o json | jq -r ".items[0].status.loadBalancer.ingress[0].ip")
+gcloud dns record-sets transaction start --zone="animal-rescue-zone"
+gcloud dns record-sets transaction add $ingressIp \
+  --name="spring.animalrescue.online" \
+  --ttl="30" \
+  --type="A" \
+  --zone="animal-rescue-zone"
+gcloud dns record-sets transaction add $ingressIp \
+  --name="partner.spring.animalrescue.online" \
+  --ttl="30" \
+  --type="A" \
+  --zone="animal-rescue-zone"
+gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
+```
 
 ## Service to service
 

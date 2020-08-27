@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1alpha2
+kind: Certificate
+metadata:
+  name: auth-cert
+  namespace: animal-rescue
+spec:
+  secretName: auth-cert-tls
+  issuerRef:
+    # The issuer created previously
+    name: gcloud-dns-issuer
+  dnsNames:
+  - auth.spring.animalrescue.online
