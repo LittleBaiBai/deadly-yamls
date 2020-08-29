@@ -32,8 +32,8 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
             name: animal-rescue-basic
             key: username
     ```
-1. Show `BasicAuthenticationSecurityConfiguration` and explain how env var gets mapped from `ANIMAL_RESCUE_SECURITY_BASIC` to `animal.rescue.security.basic` 
-1. Explain that the `basic` profile is activated using an env var in the deployment and that the profile is used to include the `BasicAuthenticationSecurityConfiguration` 
+1. Show `BasicAuthenticationSecurityConfiguration` and explain how env var gets mapped from `ANIMAL_RESCUE_SECURITY_BASIC` to `animal.rescue.security.basic`
+1. Explain that the `basic` profile is activated using an env var in the deployment and that the profile is used to include the `BasicAuthenticationSecurityConfiguration`
 1. Deploy and verify basic auth working with the app
 1. Show 401 accessing the API
 1. Add basic auth configuration to external API deployment
@@ -251,25 +251,13 @@ Then go to the ACME section and copy the yaml into `letsencrypt.yaml`
 
 - `staging` -> `prod` in the file. It's normally recommended to verify your configuration is working before using the prod server because there is rate limit on the prod server. But out of blind confidence and for time sake, we will skip that bit in this demo.
 - email: `spring-cloud-services@pivotal.io`
-- `privateKeySecretRef`: `letsencrypt-prod`. This private key is used to store the ACME/Let's Encrypt account private key, not the private key used for any Certificate resources. The account private key identifies your company/you as a user of the ACME service, and is used to sign all requests/communication with the ACME server to validate your identity.
+- `privateKeySecretRef`: `letsencrypt-staging`. This private key is used to store the ACME/Let's Encrypt account private key, not the private key used for any Certificate resources. The account private key identifies your company/you as a user of the ACME service, and is used to sign all requests/communication with the ACME server to validate your identity.
 - `HTTP01` challenge: `HTTP01` is easy to automate to issue certificates for a domain that points to your web servers. ACME server will give the client a token and expect to find it at a certain path on your domain. And because if how it works, it doesn’t allow issueing wildcard certificates.
 - `DNS-01` challenge: you can issue certificates containing wildcard domain names with this, as long as you can provide a service account that can mange your domain.
-- server: `https://acme-v02.api.letsencrypt.org/directory` (Remove `staging` from the example url).
-
-#### Google cloud DNS solver
-```shell script
-kubectl create secret generic clouddns-dns01-solver-svc-acct \
-   --from-file=$HOME/secret/gcp-key.json
-```
-
-
-[Additional information](https://letsencrypt.org/docs/challenge-types/#dns-01-challenge)
 
 #### Add DNS record for ingress
 
-Quickly mention [ExternalDNS](https://github.com/kubernetes-sigs/external-dns)
-
-Then do it manually:
+A new DNS entry takes a few minutes to get propagated, so I have created DNS entries for our apps ahead of time.
 
 ```bash
 # List existing records
@@ -307,9 +295,67 @@ gcloud dns record-sets transaction remove $ingressIp \
 gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
 ```
 
-It takes a few minutes for the DNS record getting propogated.
-//NOTE: We could create a wildcard DNS entry before the demo and use a static ip for the ingress. This will save us having
-//show how to create the DNS records or use external
+In a non demo environment, you probably wants to get this step automated and integrated in your deployment.
+It would be great if DNS records can get automatically generated for the new domains, and optionally, get deleted for the removed domains. Right?
+
+What if I tell you there is a way!
+
+[ExternalDNS](https://github.com/kubernetes-sigs/external-dns) retrieves a list of resources from the Kubernetes API to determine a desired list of DNS records, and configures your DNS providers accordingly.
+
+Helm value:
+
+```yaml
+sources:
+  - service
+  - ingress
+
+domainFilters:
+  - spring.animalrescue.online
+
+provider: google
+
+google:
+  project: cf-spring-scs
+  serviceAccountSecret: cloud-dns-key
+
+policy: sync
+```
+
+Add Service Account secret:
+
+Skip this step if the cluster is in the with the same provider of the DNS. Following [this doc](https://knative.dev/docs/serving/using-external-dns-on-gcp/#set-up-externaldns)
+
+```bash
+kubectl create secret generic cloud-dns-key \
+    --from-file=credentials.json=$HOME/credentials.json
+
+# Delete the local secret
+rm ~/credentials.json
+```
+
+Let's install it with helm chart.
+
+```yaml
+  helm:
+    flags:
+      install: [ "--create-namespace" ]
+    releases:
+      - name: external-dns
+        chartPath: bitnami/external-dns
+        valuesFiles: [k8s/external-dns-helm-values.yaml]
+        remote: true
+        namespace: external-dns
+```
+
+Start watching dns and logs
+
+```bash
+watch gcloud dns record-sets list --zone "animal-rescue-zone"
+stern external -n external-dns
+```
+
+In Ingress yaml, duplicate a route and change the domain. See the record shows up.
+Remove that route and record goes away.
 
 #### Enable TLS
 
@@ -364,7 +410,7 @@ curl https://spring.animalrescue.online/api/animals --user alice:test # Should g
 !!PROBABLY GOING TO SCRATCH THIS. LEAVING HERE FOR NOW TO REUSE SOME OF THE WORDING!!
 
 For internal facing applications, there is often a need to authenticate access to APIs using internal identity systems.
-Kubernetes can integrate the cluster security with an external identity provider using the Open ID Connect protocol (OIDC). 
+Kubernetes can integrate the cluster security with an external identity provider using the Open ID Connect protocol (OIDC).
 OIDC is an extension of the OAuth2 specification that provides some new authorization flows on top of the existing OAuth2 auth flows.
 Our applications can also use the clusters auth service as an authorization service. This should only be done for internal
 systems as it is not a good idea to store external user identities in the cluster.
@@ -375,7 +421,7 @@ the process of authorization will similar as it uses the OIDC specification, how
 
 We are going to use an `authorization_code` flow to protect access to our webpage. This flow will redirect users to a username / password
 form to enter their credentials, and then allow access to the original page.
- 
+
 
 #### Create client and user
 ```shell script
@@ -388,9 +434,9 @@ uaa create-client animal-rescue \
   -s springone2020
 ```
 The client will be used by our backend API server by Spring Security to authorize user access to the animal rescue web process.
-Typically, a client is created for each API. It is possible to authenticate to our API just using the client, however it is 
+Typically, a client is created for each API. It is possible to authenticate to our API just using the client, however it is
 considered best practice to create user accounts for each person that needs access to the API and only use the client in the API
-to validate the users access.  
+to validate the users access.
 
 ### External user - external IDP
 

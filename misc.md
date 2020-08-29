@@ -113,6 +113,59 @@ https://medium.com/@awkwardferny/configuring-certificate-based-mutual-authentica
 https://github.com/smallstep/cli#installing
 
 
+## Linkerd
+
+[doc](https://linkerd.io/)
+
+1. Install CLI
+
+```bash
+brew install linkerd
+linkerd version
+linkerd check --pre
+```
+
+1. Install linkerd control plane
+
+```bash
+linkerd install | kubectl apply -f -
+linkerd check # This command waits for installatiion to finish
+linkerd -n linkerd top deploy/linkerd-web # view what's been installed
+```
+
+1. Deploy demo app
+
+```bash
+curl -sL https://run.linkerd.io/emojivoto.yml | kubectl apply -f -
+kubectl -n emojivoto port-forward svc/web-svc 8080:80
+```
+
+1. Inject linkerd
+
+```bash
+kubectl get -n emojivoto deploy -o yaml \
+  | linkerd inject - \
+  | kubectl apply -f -
+```
+
+This command retrieves all of the deployments running in the emojivoto namespace, runs the manifest through linkerd inject, and then reapplies it to the cluster. The linkerd inject command adds annotations to the pod spec instructing Linkerd to add (“inject”) the proxy as a container to the pod spec.
+
+1. Verify
+
+```bash
+linkerd -n emojivoto check --proxy
+```
+
+**Pros:**
+
+- Automatic mTLS
+- CLI to simplify annotations
+
+**Cons:**
+
+- Maybe too feature rich? (Built in Grafana and dashboard)
+- Doesn't enforce mTLS
+
 ### Without an ingress controller
 
 #### ExternalDNS
@@ -120,6 +173,8 @@ https://github.com/smallstep/cli#installing
 With an ingress controller, we can route all requests through it so only one A record was needed with the DNS server. If we want to expose each service directly, it would be helpful to automate the whole thing with [ExternalDNS](https://github.com/kubernetes-sigs/external-dns).
 
 Following [guide with GKE](https://github.com/kubernetes-sigs/external-dns/blob/master/docs/tutorials/gke.md)
+
+https://github.com/paulczar/platform-operations-on-kubernetes/blob/master/docs/gcp-uaa-openid/install.md
 
 1. Setting up DNS zone on google cloud (Skip this in the demo):
 
@@ -144,6 +199,7 @@ Skip this step if the cluster is in the with the same provider of the DNS. Follo
 ```bash
 # # Name of the service account you want to create.
 export CLOUD_DNS_SA=cloud-dns-admin
+export PROJECT_NAME=cf-spring-scs
 
 # Create a new service account for Cloud DNS admin role.
 gcloud --project $PROJECT_NAME iam service-accounts \
@@ -157,23 +213,51 @@ export CLOUD_DNS_SA=$CLOUD_DNS_SA@$PROJECT_NAME.iam.gserviceaccount.com
 gcloud projects add-iam-policy-binding $PROJECT_NAME \
     --member serviceAccount:$CLOUD_DNS_SA \
     --role roles/dns.admin
+gcloud projects add-iam-policy-binding $PROJECT_NAME \
+    --member serviceAccount:$CLOUD_DNS_SA \
+    --role roles/storage.admin
+gcloud projects add-iam-policy-binding $PROJECT_NAME \
+    --member serviceAccount:$CLOUD_DNS_SA \
+    --role roles/editor
 
 # Download the secret key file for your service account.
-gcloud iam service-accounts keys create ~/key.json \
+gcloud iam service-accounts keys create ~/credentials.json \
     --iam-account=$CLOUD_DNS_SA
 
 # Upload the service account credential to your cluster. This command uses the secret name cloud-dns-key, but you can choose a different name.
 kubectl create secret generic cloud-dns-key \
-    --from-file=key.json=$HOME/key.json
+    --from-file=credentials.json=$HOME/credentials.json
 
 # Delete the local secret
-rm ~/key.json
+rm ~/credentials.json
 ```
 
 1. Deploy ExternalDNS
 
+[Helm install](https://github.com/bitnami/charts/tree/master/bitnami/external-dns)
+
+[Example helm values](https://github.com/paulczar/platform-operations-on-kubernetes/blob/master/charts/externaldns/helmfile/base.yaml.gotmpl)
+
 ```bash
-kubectl apply -f external-dns-manifest.yaml
+helm repo add bitnami https://charts.bitnami.com/bitnami
+helm install external-dns bitnami/external-dns
+```
+
+With Helm value:
+
+```yaml
+sources:
+  - service
+  - ingress
+
+domainFilters:
+  - spring.animalrescue.online
+
+provider: google
+
+google:
+  project: cf-spring-scs
+  serviceAccountSecret: cloud-dns-key
 ```
 
 1. Update the service to be `LoadBalancer` with the `external-dns.alpha.kubernetes.io/hostname` annotation
