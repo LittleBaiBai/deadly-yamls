@@ -212,7 +212,6 @@ secrets into Pods, such as HashiCorp Vault
 #### Install CertManager with Helm
 
 ```bash
-kubectl create namespace cert-manager
 helm repo add jetstack https://charts.jetstack.io
 helm repo update
 helm install cert-manager jetstack/cert-manager \
@@ -223,6 +222,8 @@ helm install cert-manager jetstack/cert-manager \
 ```
 
 [More info about the chart](https://github.com/helm/charts/tree/master/stable/cert-manager)
+
+#### Skip this during demo
 
 _Note for ourselves: steps to uninstall certmanager:_
 
@@ -553,6 +554,7 @@ gcloud dns record-sets transaction execute --zone="kubedemo-zone"
 
 ### Manually
 
+Earlier when we looked at cert manager page, we quickly mentioned the CA issuer type
 It's possible to reuse what we have set up with Let's Encrypt before. But for mTLS, it's better to use a private CA to avoid exposing your system to all.
 
 It's not trivial to get it to work, and then you will need to worry about cert rotations. So not recommend.
@@ -631,7 +633,7 @@ or with Helm:
 
 ```bash
 helm repo add smallstep https://smallstep.github.io/helm-charts/
-helm install smallstep/autocert
+helm install autocert smallstep/autocert --namespace autocert --create-namespace
 ```
 
 Store installation info:
@@ -645,66 +647,153 @@ Store this information somewhere safe:
 
 1. Enable for the namespace
 
-To label the default namespace run:
+Add label the `animal-rescue` namespace yaml:
+
+```yaml
+metadata:
+  labels:
+    autocert.step.sm: enabled
+```
+
+That's equivalent to running the following command:
 
 ```bash
-kubectl label namespace default autocert.step.sm=enabled
+kubectl label namespace animal-rescue autocert.step.sm=enabled
 ```
 
 To check which namespaces have autocert enabled run:
 
 ```bash
-$ kubectl get namespace -L autocert.step.sm
-NAME          STATUS   AGE   AUTOCERT.STEP.SM
-default       Active   59m   enabled
+kubectl get namespace -L autocert.step.sm
 ```
 
-1. Deploy a mtls server
+1. Annotate external-api deployment
 
-```bash
-kubectl apply -f hello-mtls.yaml
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        autocert.step.sm/name: partner-adoption-center.animal-rescue.svc.cluster.local
 ```
+
+1. Describe the pod to see a sidecar is created
 
 Verify cert is created and injected:
 
 ```bash
-$ export HELLO_MTLS=$(kubectl get pods -l app=hello-mtls -o jsonpath='{$.items[0].metadata.name}')
-$ kubectl exec -it $HELLO_MTLS -c hello-mtls -- ls /var/run/autocert.step.sm
-root.crt  site.crt  site.key
-$ kubectl exec -it $HELLO_MTLS -c hello-mtls -- cat /var/run/autocert.step.sm/site.crt | step certificate inspect --short -
+set PARTNER_POD (kubectl get pods -l app=partner-adoption-center -o jsonpath='{$.items[0].metadata.name}')
+kubectl exec -it $PARTNER_POD -c partner-adoption-center -- ls /var/run/autocert.step.sm
+# Should see root.crt  site.crt  site.key
+kubectl exec -it $PARTNER_POD -c partner-adoption-center -- cat /var/run/autocert.step.sm/site.crt | step certificate inspect --short -
+# Should see subject being set and validity to be 1 day
 ```
+
+1. Use the cert in the node app
+
+```js
+const https = require('https');
+const tls = require('tls');
+const fs = require('fs');
+const axios = require('axios');
+
+const animalRescueBaseUrl = process.env.ANIMAL_RESCUE_BASE_URL;
+const animalRescueUsername = process.env.ANIMAL_RESCUE_USERNAME || '';
+const animalRescuePassword = process.env.ANIMAL_RESCUE_PASSWORD || '';
+
+const requestAnimalsFromAnimalRescue = async () => {
+    try {
+        const response = await axios.get(`${animalRescueBaseUrl}/api/animals`);
+        return { animals: response.data };
+    } catch (e) {
+        console.error(e);
+        return { error: e };
+    }
+};
+
+const config = {
+    ca: '/var/run/autocert.step.sm/root.crt',
+    key: '/var/run/autocert.step.sm/site.key',
+    cert: '/var/run/autocert.step.sm/site.crt',
+    ciphers: 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256',
+    minVersion: 'TLSv1.2',
+    maxVersion: 'TLSv1.2'
+};
+
+const createSecureContext = () => {
+    return tls.createSecureContext({
+        ca: fs.readFileSync(config.ca),
+        key: fs.readFileSync(config.key),
+        cert: fs.readFileSync(config.cert),
+        ciphers: config.ciphers,
+    });
+};
+
+let ctx = createSecureContext();
+
+fs.watch(config.cert, (event, filename) => {
+    if (event === 'change') {
+        ctx = createSecureContext();
+    }
+});
+
+const serverOptions = {
+    requestCert: true,
+    rejectUnauthorized: true,
+    SNICallback: (servername, cb) => {
+        cb(null, ctx);
+    }
+};
+
+const server = https.createServer(serverOptions, async (req, res) => {
+    if (req.url === '/') {
+        res.writeHead(200, {'Content-Type': 'text/html'});
+
+        const {animals, error} = await requestAnimalsFromAnimalRescue();
+        console.log(animals, error);
+        if(error) {
+            res.write(`<html><body><p>Failed to retrieve animals: ${error}</body></html>`);
+        } else {
+            const animalHtmlList = animals.map(animal => `<li>${animal.name}</li>`).join('');
+            res.write(`<html><body><p>Animals available at Animal Rescue: ${animalHtmlList}</body></html>`);
+        }
+
+        res.end();
+    }
+});
+
+server.listen(5000);
+console.info('Partner Adoption Center web server is running on port 5000..');
+```
+
+Do a git diff and talk about the differences.
+
+1. Update service to be on port 443
 
 1. Deploy a mtls client
 
-```bash
-kubectl apply -f hello-mtls-client.yaml
-```
+Add `curl-mtls-client.yaml` to `external-api/k8s/kustomization.yaml`
 
 Verify it works in the logs
 
 ```bash
-stern hello-mtls-client
+stern curl-mtls-client
 ```
 
 ```bash
-$ export HELLO_MTLS_CLIENT=$(kubectl get pods -l app=hello-mtls-client -o jsonpath='{$.items[0].metadata.name}')
-$ kubectl exec $HELLO_MTLS_CLIENT -c hello-mtls-client -- curl -sS \
+set CURL_MTLS_CLIENT (kubectl get pods -l app=curl-mtls-client -o jsonpath='{$.items[0].metadata.name}')
+k exec -it $CURL_MTLS_CLIENT -- bash
+curl https://partner-adoption-center.animal-rescue.svc.cluster.local
+curl -sS \
        --cacert /var/run/autocert.step.sm/root.crt \
        --cert /var/run/autocert.step.sm/site.crt \
        --key /var/run/autocert.step.sm/site.key \
-       https://hello-mtls.default.svc.cluster.local
-Hello, hello-mtls-client.default.pod.cluster.local!
+       https://partner-adoption-center
+curl -sS \
+       --cacert /var/run/autocert.step.sm/root.crt \
+       --cert /var/run/autocert.step.sm/site.crt \
+       --key /var/run/autocert.step.sm/site.key \
+       https://partner-adoption-center.animal-rescue.svc.cluster.local
 ```
 
 [How it works](https://github.com/smallstep/autocert#how-it-works)
-
-**Pros:**
-
-- Private keys are kept on container disk only and are never stored in Kubernetes secrets - which may not be encrypted in the storage backend - or transferred over the network
-- Easy to set up and run
-
-**Cons:**
-
-- Autocert works really well if the applications already knows how to load certificate and keys, how to periodically reload them, and how to do TLS termination. But this may not be the case most of the times, especially with Java where SSL/TLS can be expensive. In cases like these, it may be beneficial to offload TLS termination to a local proxy.
-
-### With a mesh (TSM?)

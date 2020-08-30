@@ -307,3 +307,7 @@ https://linkerd.io/2/reference/cluster-configuration/#private-clusters
 1. Istio with wildcard certificates
 
 https://github.com/stefanprodan/istio-gke/blob/master/docs/istio/05-letsencrypt-setup.md
+
+1. mTLS with spring boot
+
+https://medium.com/@niral22/2-way-ssl-with-spring-boot-microservices-2c97c974e83
