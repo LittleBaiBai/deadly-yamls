@@ -3,6 +3,7 @@
 ## Basic Auth on API
 
 ### Without auth
+
 Generate k8s resources using code completion
 
 Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
@@ -32,6 +33,7 @@ Deploy animal-rescue api and test viewing the page and `/api/animals` endpoint
             name: animal-rescue-basic
             key: username
     ```
+
 1. Show `BasicAuthenticationSecurityConfiguration` and explain how env var gets mapped from `ANIMAL_RESCUE_SECURITY_BASIC` to `animal.rescue.security.basic`
 1. Explain that the `basic` profile is activated using an env var in the deployment and that the profile is used to include the `BasicAuthenticationSecurityConfiguration`
 1. Deploy and verify basic auth working with the app
@@ -95,13 +97,13 @@ metadata:
   namespace: animal-rescue
 spec:
   rules:
-    - host: spring.animalrescue.online
+    - host: animalrescue.kubedemo.xyz
       http:
         paths:
           - backend:
               serviceName: animal-rescue
               servicePort: 80
-    - host: partner.spring.animalrescue.online
+    - host: partner.kubedemo.xyz
       http:
         paths:
           - backend:
@@ -146,6 +148,9 @@ secretGenerator:
   type: Opaque
   files:
   - auth
+
+generatorOptions:
+  disableNameSuffixHash: true
 ```
 
 #### Add basic auth annotation to ingress
@@ -169,15 +174,15 @@ secretGenerator:
 Update skaffold to include the ingress yaml, add DNS entries for to `/etc/hosts`:
 
 ```text
-${ingressIP} spring.animalrescue.online
-${ingressIP} partner.spring.animalrescue.online
+${ingressIP} animalrescue.kubedemo.xyz
+${ingressIP} partner.kubedemo.xyz
 ```
 
 #### Talk about services no longer need to be loadbalanced
 
 #### Verify it works
 
-Visit `spring.animalrescue.online` and `partner.spring.animalrescue.online`
+Visit `animalrescue.kubedemo.xyz` and `partner.kubedemo.xyz`
 
 #### ingress-nginx plugin
 
@@ -211,6 +216,7 @@ kubectl create namespace cert-manager
 helm repo add jetstack https://charts.jetstack.io
 helm repo update
 helm install cert-manager jetstack/cert-manager \
+    --create-namespace \
     --namespace cert-manager \
     --version v0.16.1 \
     --set installCRDs=true
@@ -249,7 +255,7 @@ Click on the hyperlink, quickly show what's possible with certmanager:
 
 Then go to the ACME section and copy the yaml into `letsencrypt.yaml`
 
-- `staging` -> `prod` in the file. It's normally recommended to verify your configuration is working before using the prod server because there is rate limit on the prod server. But out of blind confidence and for time sake, we will skip that bit in this demo.
+- `staging` -> It's important to verify your configuration is working before using the prod server because there is rate limit on the prod server. A bit of a back story here - I actually bought the domain `animalrescue.online` for this talk, hoping to pretend as a real rescue center, but then we hit the limit last week when we were developing this talk. So let's do it the safe way so we don't run out of quota for this new domain.
 - email: `spring-cloud-services@pivotal.io`
 - `privateKeySecretRef`: `letsencrypt-staging`. This private key is used to store the ACME/Let's Encrypt account private key, not the private key used for any Certificate resources. The account private key identifies your company/you as a user of the ACME service, and is used to sign all requests/communication with the ACME server to validate your identity.
 - `HTTP01` challenge: `HTTP01` is easy to automate to issue certificates for a domain that points to your web servers. ACME server will give the client a token and expect to find it at a certain path on your domain. And because if how it works, it doesn’t allow issueing wildcard certificates.
@@ -257,80 +263,105 @@ Then go to the ACME section and copy the yaml into `letsencrypt.yaml`
 
 #### Add DNS record for ingress
 
-A new DNS entry takes a few minutes to get propagated, so I have created DNS entries for our apps ahead of time.
+Because how HTTP challange works, we will need a valid DNS entry available for let's encrypt server to verify the token. So let's focus on that next.
+
+A new DNS entry takes a few minutes to get propagated, so I have created DNS entries that matches the domain name we specified in ingress ahead of time.
 
 ```bash
 # List existing records
-gcloud dns record-sets list --zone "animal-rescue-zone"
+gcloud dns record-sets list --zone kubedemo-zone --filter=name~'.*bella.*'
+```
 
+#### Skip this section in resentation
+
+```bash
 # Get ingress IP
 set ingressIp (kubectl get ingress -o json | jq -r .items[0].status.loadBalancer.ingress[0].ip) # Fish syntax, use export in bash
 
 # Add new record
-gcloud dns record-sets transaction start --zone="animal-rescue-zone"
+gcloud dns record-sets transaction start --zone="kubedemo-zone"
 gcloud dns record-sets transaction add $ingressIp \
-  --name="spring.animalrescue.online" \
+  --name="animalrescue.kubedemo.xyz" \
   --ttl="30" \
   --type="A" \
-  --zone="animal-rescue-zone"
+  --zone="kubedemo-zone"
 gcloud dns record-sets transaction add $ingressIp \
-  --name="partner.spring.animalrescue.online" \
+  --name="partner.kubedemo.xyz" \
   --ttl="30" \
   --type="A" \
-  --zone="animal-rescue-zone"
-gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
+  --zone="kubedemo-zone"
+gcloud dns record-sets transaction execute --zone="kubedemo-zone"
 
 # Remove record
-gcloud dns record-sets transaction start --zone="animal-rescue-zone"
+gcloud dns record-sets transaction start --zone="kubedemo-zone"
 gcloud dns record-sets transaction remove $ingressIp \
-  --name="spring.animalrescue.online" \
+  --name="animalrescue.kubedemo.xyz" \
   --ttl="30" \
   --type="A" \
-  --zone="animal-rescue-zone"
+  --zone="kubedemo-zone"
 gcloud dns record-sets transaction remove $ingressIp \
-  --name="partner.spring.animalrescue.online" \
+  --name="partner.kubedemo.xyz" \
   --ttl="30" \
   --type="A" \
-  --zone="animal-rescue-zone"
-gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
+  --zone="kubedemo-zone"
+gcloud dns record-sets transaction execute --zone="kubedemo-zone"
 ```
 
-In a non demo environment, you probably wants to get this step automated and integrated in your deployment.
-It would be great if DNS records can get automatically generated for the new domains, and optionally, get deleted for the removed domains. Right?
+#### Demo External DNS for ingress
 
-What if I tell you there is a way!
+Adding or removing DNS records from Google Cloud DNS is relatively easy with the `gcloud` plugin, and most of the cloud DNS providers offers API for ease of automation.
 
-[ExternalDNS](https://github.com/kubernetes-sigs/external-dns) retrieves a list of resources from the Kubernetes API to determine a desired list of DNS records, and configures your DNS providers accordingly.
+In a non demo environment, you probably wants to get this step more automated and integrated in your deployment.
+
+It would be great if DNS records can get automatically generated for the new domains specified in kubernetes, and optionally, get deleted on resource removal. Right?
+
+Well, what if I tell you there is a way!
+
+Just like how KubeDNS makes services discoverable internally, [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) retrieves a list of resources from the Kubernetes API to determine a desired list of DNS records, and configures your DNS providers accordingly.
+
+To install it with helm chart, we need to configure it.
 
 Helm value:
 
 ```yaml
+# Sources specify the types of kubernetes resources we are watching for. In our example, we only expose services through ingress, so we can remove `service` from our sources.
 sources:
   - service
   - ingress
 
+# This looks like domain filters but it's actually filtering on a zones with matching domains.
+# and omitting this setting allows you to process all available hosted zones.
 domainFilters:
-  - spring.animalrescue.online
+  - kubedemo.xyz
 
 provider: google
 
 google:
   project: cf-spring-scs
-  serviceAccountSecret: cloud-dns-key
 
-policy: sync
+  # We need to specify a service account because my cluster is on PKS but my DNS is on GKE. If you. You can skip this setting if your cluster is with the same cloud provider as your DNS server. However, it's still recommended to have a separate DNS management account dedicated for DNS management.
+  serviceAccountSecret: cloud-dns-admin
+
+  # External DNS will use `credentials.json` by default to retrieve the service account info. Since I had to give this file a more descriptive name, I need to also set the secret key here.
+  serviceAccountSecretKey: gcp-dns-account-credentials.json
+
+policy: upsert-only # This is the default value. `sync` will sync up the whole zone and remove unknown domains. `sync` is a great option if you are 100% sure that the external-dns would be the only manager of the zone. I initially wanted to show you how it automatically removes DNS record when I remove the ingress rule, but then I wiped out all the DNS records needed by Ollie. So A) you will have to imagine this `sync` demo in your head, and B), be careful with this option.
 ```
 
-Add Service Account secret:
+We promised external-dns a service account that has access to manage DNS, so let's add that to our kustomization yaml.
 
-Skip this step if the cluster is in the with the same provider of the DNS. Following [this doc](https://knative.dev/docs/serving/using-external-dns-on-gcp/#set-up-externaldns)
+Add to `k8s/kustomization.yaml`
 
-```bash
-kubectl create secret generic cloud-dns-key \
-    --from-file=credentials.json=$HOME/credentials.json
+```yaml
+secretGenerator:
+- name: cloud-dns-admin
+  type: Opaque
+  namespace: external-dns
+  files:
+  - secret/gcp-dns-account-credentials.json
 
-# Delete the local secret
-rm ~/credentials.json
+generatorOptions:
+  disableNameSuffixHash: true
 ```
 
 Let's install it with helm chart.
@@ -350,7 +381,7 @@ Let's install it with helm chart.
 Start watching dns and logs
 
 ```bash
-watch gcloud dns record-sets list --zone "animal-rescue-zone"
+watch gcloud dns record-sets list --zone kubedemo-zone --filter=name~'.*bella.*'
 stern external -n external-dns
 ```
 
@@ -359,31 +390,32 @@ Remove that route and record goes away.
 
 #### Enable TLS
 
-Create ClusterIssuer with LetsEncrypt
+Now, with valid DNS records, we should be able to handle the HTTP challenge from let's encrypt.
+So, let's encrypt!
 
-Add the Let's Encrypt yaml file in `kustomization.yaml`
+Add the Let's Encrypt yaml file in `k8s/kustomization.yaml`
 
 Now add the following annotation to ingress to use cert-manager:
 
 ```yaml
 annotations:
-  # Additional to existing annotations
-  cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  # In addition to existing annotations
+  cert-manager.io/cluster-issuer: "letsencrypt-staging"
   kubernetes.io/tls-acme: "true"
 spec:
   tls:
     - hosts:
-        - spring.animalrescue.online
+        - animalrescue.bella.kubedemo.xyz
       secretName: animal-rescue-certs
     - hosts:
-        - partner.spring.animalrescue.online
+        - partner.bella.kubedemo.xyz
       secretName: partner-certs
 ```
 
 Wait until certificate is successfully issued:
 
 ```bash
-kubectl describe ingress echo-ingress
+kubectl describe ingress animal-rescue-ingress
 ```
 
 Should see:
@@ -396,13 +428,29 @@ Events:
   Normal  CreateCertificate  97s   cert-manager              Successfully created Certificate "echo-tls"
 ```
 
+Check certificate status:
+
+```bash
+k get certificates
+```
+
 Verify TLS:
 
 ```bash
-curl http://spring.animalrescue.online/api/animals # Should get `308 Permanent Redirect` back
-curl https://spring.animalrescue.online/api/animals # Should get `401` back
-curl https://spring.animalrescue.online/api/animals --user alice:test # Should get `200`response back
+curl http://animalrescue.bella.kubedemo.xyz/api/animals # Should get `308 Permanent Redirect` back
+curl https://animalrescue.bella.kubedemo.xyz/api/animals # Should get `401` back
+curl https://animalrescue.bella.kubedemo.xyz/api/animals --user alice:test # Should get `200`response back
 ```
+
+After we verified that everything works fine, we shall switch to use prod server.
+
+- Duplicate `letsencrypt-staging.yaml`
+- Change all `staing` to `prod`
+- Remove `staging-` from `server`
+- Update to `letsencypt-prod.yaml` to `k8s/kustomization.yaml`
+- Use the prod issuer in ingress
+
+Visit the site again to see a trusted cert!
 
 ## OAuth2 integration
 
@@ -430,7 +478,7 @@ uaa create-client animal-rescue \
   --authorities "uaa.resource" \
   --authorized_grant_types "authorization_code,refresh_token" \
   --scope "resource.read,resource.write,openid,profile,email" \
-  --redirect_uri http://spring.animalrescue.online \
+  --redirect_uri http://animalrescue.kubedemo.xyz \
   -s springone2020
 ```
 The client will be used by our backend API server by Spring Security to authorize user access to the animal rescue web process.
@@ -448,8 +496,8 @@ TODO: Update links to HTTPS
 
 #### Register a new application in GitHub
 1. Login to GitHub and go to settings | Developer Settings | New OAuth App
-1. Enter Animal Rescue for name, http://spring.animalrescue.online for homepage
- and http://auth.spring.animalrescue.online/oauth2/callback for callback url
+1. Enter Animal Rescue for name, http://animalrescue.kubedemo.xyz for homepage
+ and http://auth.kubedemo.xyz/oauth2/callback for callback url
 1. Take a note of client ID and secret
 
 #### Deploy oauth2-proxy
@@ -487,18 +535,18 @@ As before, we will need to create a DNS record for the auth service using the in
 
 ```shell script
 export ingressIp =$(kubectl get ingress -o json | jq -r ".items[0].status.loadBalancer.ingress[0].ip")
-gcloud dns record-sets transaction start --zone="animal-rescue-zone"
+gcloud dns record-sets transaction start --zone="kubedemo-zone"
 gcloud dns record-sets transaction add $ingressIp \
-  --name="spring.animalrescue.online" \
+  --name="auth.kubedemo.xyz" \
   --ttl="30" \
   --type="A" \
-  --zone="animal-rescue-zone"
+  --zone="kubedemo-zone"
 gcloud dns record-sets transaction add $ingressIp \
-  --name="partner.spring.animalrescue.online" \
+  --name="partner.kubedemo.xyz" \
   --ttl="30" \
   --type="A" \
-  --zone="animal-rescue-zone"
-gcloud dns record-sets transaction execute --zone="animal-rescue-zone"
+  --zone="kubedemo-zone"
+gcloud dns record-sets transaction execute --zone="kubedemo-zone"
 ```
 
 ## Service to service
