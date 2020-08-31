@@ -256,17 +256,15 @@ Click on the hyperlink, quickly show what's possible with certmanager:
 
 Then go to the ACME section and copy the yaml into `letsencrypt.yaml`
 
-- `staging` -> It's important to verify your configuration is working before using the prod server because there is rate limit on the prod server. A bit of a back story here - I actually bought the domain `animalrescue.online` for this talk, hoping to pretend as a real rescue center, but then we hit the limit last week when we were developing this talk. So let's do it the safe way so we don't run out of quota for this new domain.
 - email: `spring-cloud-services@pivotal.io`
+- `staging` -> It's important to verify your configuration is working before using the prod server because there is rate limit on the prod server. A bit of a back story here - I actually bought the domain `animalrescue.online` for this talk, hoping to pretend as a real rescue center, but then we hit the limit last week when we were developing this talk. So let's do it the safe way so we don't run out of quota for this new domain.
 - `privateKeySecretRef`: `letsencrypt-staging`. This private key is used to store the ACME/Let's Encrypt account private key, not the private key used for any Certificate resources. The account private key identifies your company/you as a user of the ACME service, and is used to sign all requests/communication with the ACME server to validate your identity.
 - `HTTP01` challenge: `HTTP01` is easy to automate to issue certificates for a domain that points to your web servers. ACME server will give the client a token and expect to find it at a certain path on your domain. And because if how it works, it doesn’t allow issueing wildcard certificates.
 - `DNS-01` challenge: you can issue certificates containing wildcard domain names with this, as long as you can provide a service account that can mange your domain.
 
 #### Add DNS record for ingress
 
-Because how HTTP challange works, we will need a valid DNS entry available for let's encrypt server to verify the token. So let's focus on that next.
-
-A new DNS entry takes a few minutes to get propagated, so I have created DNS entries that matches the domain name we specified in ingress ahead of time.
+To save some time in this demo, I have created the DNS record ahead of time for the hostnames specified in my ingress, so that we can use http challenge to quickly get our cert.
 
 ```bash
 # List existing records
@@ -310,17 +308,13 @@ gcloud dns record-sets transaction execute --zone="kubedemo-zone"
 
 #### Demo External DNS for ingress
 
-Adding or removing DNS records from Google Cloud DNS is relatively easy with the `gcloud` plugin, and most of the cloud DNS providers offers API for ease of automation.
+In a environment where you don't have a single entry point to all your services and can't just add a wildcard DNS record for all your domains, you probably wants to get this step more automated and integrated in your deployment. Yes automating DNS mapping will slow down the HTTP Challenge process because DNS records takes time to propagate, but the benefit of automation may outweight the delay depends on the use cases. And if you are already using DNS challenge then you have nothing to lose!
 
-In a non demo environment, you probably wants to get this step more automated and integrated in your deployment.
+Let's take a detour to see how to do automate it, then we will come back to TLS.
 
-It would be great if DNS records can get automatically generated for the new domains specified in kubernetes, and optionally, get deleted on resource removal. Right?
+Just like how KubeDNS adds internal DNS records to make services reachable internally, there is a tool called [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) that configures your DNS providers accordingly. It retrieves a list of resources from the Kubernetes API to determine a desired list of DNS records, and configures your DNS providers accordingly.
 
-Well, what if I tell you there is a way!
-
-Just like how KubeDNS makes services discoverable internally, [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) retrieves a list of resources from the Kubernetes API to determine a desired list of DNS records, and configures your DNS providers accordingly.
-
-To install it with helm chart, we need to configure it.
+We will install it with helm chart, but to configure it to use our DNS provider, we need to configure it.
 
 Helm value:
 
@@ -330,8 +324,8 @@ sources:
   - service
   - ingress
 
-# This looks like domain filters but it's actually filtering on a zones with matching domains.
-# and omitting this setting allows you to process all available hosted zones.
+# Domain filters tells external DNS to filter on your hosted DNS zones with matching domain.
+# Omitting this setting allows you to process all available hosted zones.
 domainFilters:
   - kubedemo.xyz
 
@@ -340,16 +334,17 @@ provider: google
 google:
   project: cf-spring-scs
 
-  # We need to specify a service account because my cluster is on PKS but my DNS is on GKE. If you. You can skip this setting if your cluster is with the same cloud provider as your DNS server. However, it's still recommended to have a separate DNS management account dedicated for DNS management.
+  # We need to specify a service account because our cluster is on Tanzu Kubernetes Grid but our DNS is on GCP. You can skip this setting if your cluster is with the same cloud provider as your DNS server. However, it's still recommended to have a separate DNS management account dedicated for DNS management.
   serviceAccountSecret: cloud-dns-admin
 
-  # External DNS will use `credentials.json` by default to retrieve the service account info. Since I had to give this file a more descriptive name, I need to also set the secret key here.
+  # External DNS uses `credentials.json` as key by default to retrieve the service account info from the secret. Since I had to give this file a more descriptive name, I need to also set the secret key here.
   serviceAccountSecretKey: gcp-dns-account-credentials.json
 
-policy: upsert-only # This is the default value. `sync` will sync up the whole zone and remove unknown domains. `sync` is a great option if you are 100% sure that the external-dns would be the only manager of the zone. I initially wanted to show you how it automatically removes DNS record when I remove the ingress rule, but then I wiped out all the DNS records needed by Ollie. So A) you will have to imagine this `sync` demo in your head, and B), be careful with this option.
+# `sync` will sync up the whole zone and remove unknown domains. It is a great option if you are 100% sure that the external-dns would be the only manager of the zone. It handles the removal of the DNS records if the corresponding k8s resources are removed. Since I'm sharing this zone with Ollie, I'll use upsert-only so I don't ruin his plan.
+policy: upsert-only
 ```
 
-We promised external-dns a service account that has access to manage DNS, so let's add that to our kustomization yaml.
+We promised external-dns a service account that has access to manage DNS, so let's add a secretGenerator to our kustomization yaml that generates this secret using my account key file on my machine.
 
 Add to `k8s/kustomization.yaml`
 
@@ -361,8 +356,7 @@ secretGenerator:
   files:
   - secret/gcp-dns-account-credentials.json
 
-generatorOptions:
-  disableNameSuffixHash: true
+  # This credentials file was pulled down with gcloud CLI earlier and it's not checked in to Git. If you are trying out our repo after this talk, you will not be able to use this directly. Also, your cloud provider may need different configuration so check out external-dns doc for more information.
 ```
 
 Let's install it with helm chart.
@@ -379,19 +373,24 @@ Let's install it with helm chart.
         namespace: external-dns
 ```
 
+Wait until it's running
+
+```bash
+watch -n 1 kubectl get all -n external-dns
+```
+
 Start watching dns and logs
 
 ```bash
-watch gcloud dns record-sets list --zone kubedemo-zone --filter=name~'.*bella.*'
+watch -n 1 gcloud dns record-sets list --zone kubedemo-zone --filter=name~'.*bella.*'
 stern external -n external-dns
 ```
 
 In Ingress yaml, duplicate a route and change the domain. See the record shows up.
-Remove that route and record goes away.
 
 #### Enable TLS
 
-Now, with valid DNS records, we should be able to handle the HTTP challenge from let's encrypt.
+Now, back to TLS. Since we have valid DNS records for the urls, we should be able to handle the HTTP challenge from let's encrypt.
 So, let's encrypt!
 
 Add the Let's Encrypt yaml file in `k8s/kustomization.yaml`
@@ -403,7 +402,11 @@ annotations:
   # In addition to existing annotations
   cert-manager.io/cluster-issuer: "letsencrypt-staging"
   kubernetes.io/tls-acme: "true"
+
+  # cert-manager.io/cluster-issuer: "letsencrypt-staging" # We are telling our ingress to use the let's encrypt staging issuer
+  # kubernetes.io/tls-acme: "true" # Remember the endpoint that let's encrypt uses to verify the token? This annotation tells ingress to exclude that path from authentication.
 spec:
+  # <Add description here, also talk about when would you want separete certs> <Let's encrypt allow up to 100 domains per cert>
   tls:
     - hosts:
         - animalrescue.bella.kubedemo.xyz
@@ -416,17 +419,7 @@ spec:
 Wait until certificate is successfully issued:
 
 ```bash
-kubectl describe ingress animal-rescue-ingress
-```
-
-Should see:
-
-```bash
-Events:
-  Type    Reason             Age   From                      Message
-  ----    ------             ----  ----                      -------
-  Normal  CREATE             97s   nginx-ingress-controller  Ingress default/echo-ingress
-  Normal  CreateCertificate  97s   cert-manager              Successfully created Certificate "echo-tls"
+kubectl describe ingress
 ```
 
 Check certificate status:
@@ -552,102 +545,21 @@ gcloud dns record-sets transaction execute --zone="kubedemo-zone"
 
 ## Service to service
 
-### Manually
-
-Earlier when we looked at cert manager page, we quickly mentioned the CA issuer type
-It's possible to reuse what we have set up with Let's Encrypt before. But for mTLS, it's better to use a private CA to avoid exposing your system to all.
-
-It's not trivial to get it to work, and then you will need to worry about cert rotations. So not recommend.
-
-#### Without mTLS
-
-Use the same echo service:
-
-```bash
-k apply -f echo1.yaml
-```
-
-#### Generate certs
-
-```bash
-cd certs
-# Need to enable v3 ca generation on mac: https://github.com/jetstack/cert-manager/issues/279
-openssl req -x509 -new -nodes -key ca.key -sha256 -days 365 -out ca.crt -extensions v3_ca -config openssl-with-ca.cnf -subj '/CN=Animal Cert Authority'
-
-# Generate the Server Key, and Certificate and Sign with the CA Certificate
-openssl req -new -newkey rsa:4096 -keyout server.key -out server.csr -nodes -subj '/CN=animalrescue.online'
-openssl x509 -req -sha256 -days 365 -in server.csr -CA ca.crt -CAkey ca.key -set_serial 01 -out server.crt
-# Generate the Client Key, and Certificate and Sign with the CA Certificate
-openssl req -new -newkey rsa:4096 -keyout client.key -out client.csr -nodes -subj '/CN=another-rescue.org'
-openssl x509 -req -sha256 -days 365 -in client.csr -CA ca.crt -CAkey ca.key -set_serial 02 -out client.crt
-```
-
-#### Add in mTLS
-
-[Cert Manager doc for adding CA](https://cert-manager.io/docs/configuration/ca/)
-
-[Guide](https://medium.com/@awkwardferny/configuring-certificate-based-mutual-authentication-with-kubernetes-ingress-nginx-20e7e38fdfca)
-
-```bash
-# Create secret in Kubernetes cluster
-kubectl create secret generic ca-key-pair --from-file=tls.crt=ca.crt --from-file=tls.key=ca.key
-
-# Create CA issuer
-k apply -f private-ca-issuer.yaml
-
-# Verify issuer creation
-kubectl get issuers private-ca-issuer -o wide
-```
-
-Verify:
-
-```bash
-curl http://animalrescue.online/echo1 # Should get `400 Forbidden` back
-curl https://animalrescue.online/echo1 # Should get `400 Forbidden` back
-curl https://animalrescue.online/echo1 --cert ./certs/client.crt --key ./certs/client.key -k # Should get `200` back
-```
-
-The certificate request stayed as `in progress` after a very long time, and I'm getting `403` no matter how I make the request. This is not going to work.
-
 ### With Autocert
 
 [Doc](https://github.com/smallstep/autocert)
 
-1. Make sure the cluster is kubernetes 1.9 or later with admission webhooks enabled
+1. Install Autocert
+
+With Helm:
 
 ```bash
-$ kubectl version --short
-Client Version: v1.16.6-beta.0
-Server Version: v1.16.12+vmware.1
-$ kubectl api-versions | grep "admissionregistration.k8s.io/v1beta1"
-admissionregistration.k8s.io/v1beta1
-```
-
-1. Install
-
-```bash
-kubectl run autocert-init -it --rm --image smallstep/autocert-init --restart Never
-```
-
-or with Helm:
-
-```bash
-helm repo add smallstep https://smallstep.github.io/helm-charts/
 helm install autocert smallstep/autocert --namespace autocert --create-namespace
 ```
 
-Store installation info:
+The output from installation is helpful here.
 
-```bash
-Store this information somewhere safe:
-  CA & admin provisioner password: I6C7f4Iku446iqmPkhsZNMyVdjjnY198
-  Autocert password: HMM0seFbhRKwsR38FPXLSfqpXUOTijJM
-  CA Fingerprint: e477129c307aaf55024d5b30e03dbe2997c3775016bc7a9091fce6ffac7125e2
-```
-
-1. Enable for the namespace
-
-Add label the `animal-rescue` namespace yaml:
+First of all, it tells us to label the namespace where we want to enable autocert. Let's add that to the yaml in our project so it get's version controlled.
 
 ```yaml
 metadata:
@@ -655,19 +567,15 @@ metadata:
     autocert.step.sm: enabled
 ```
 
-That's equivalent to running the following command:
-
-```bash
-kubectl label namespace animal-rescue autocert.step.sm=enabled
-```
-
-To check which namespaces have autocert enabled run:
+The second command teaches us how to check which namespaces have autocert enabled:
 
 ```bash
 kubectl get namespace -L autocert.step.sm
 ```
 
-1. Annotate external-api deployment
+The next three commands are important if we want to generate a certificate for external uses, for example calling a k8s app from TAS. We won't cover this case today, but at least I want to run this last command and show you the internal CA has been created.
+
+1. Now let's annotate the our node app deployment to trigger autocert
 
 ```yaml
 spec:
@@ -689,90 +597,28 @@ kubectl exec -it $PARTNER_POD -c partner-adoption-center -- cat /var/run/autocer
 # Should see subject being set and validity to be 1 day
 ```
 
-1. Use the cert in the node app
+The certs are created now. But do we get mTLS? Not yet. If we come back to this diagram, the last step still requires our manual work.
 
-```js
-const https = require('https');
-const tls = require('tls');
-const fs = require('fs');
-const axios = require('axios');
+Just to show the before stage before we update the app, let's curl the service without a cert to see how it responds:
 
-const animalRescueBaseUrl = process.env.ANIMAL_RESCUE_BASE_URL;
-const animalRescueUsername = process.env.ANIMAL_RESCUE_USERNAME || '';
-const animalRescuePassword = process.env.ANIMAL_RESCUE_PASSWORD || '';
-
-const requestAnimalsFromAnimalRescue = async () => {
-    try {
-        const response = await axios.get(`${animalRescueBaseUrl}/api/animals`);
-        return { animals: response.data };
-    } catch (e) {
-        console.error(e);
-        return { error: e };
-    }
-};
-
-const config = {
-    ca: '/var/run/autocert.step.sm/root.crt',
-    key: '/var/run/autocert.step.sm/site.key',
-    cert: '/var/run/autocert.step.sm/site.crt',
-    ciphers: 'ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256',
-    minVersion: 'TLSv1.2',
-    maxVersion: 'TLSv1.2'
-};
-
-const createSecureContext = () => {
-    return tls.createSecureContext({
-        ca: fs.readFileSync(config.ca),
-        key: fs.readFileSync(config.key),
-        cert: fs.readFileSync(config.cert),
-        ciphers: config.ciphers,
-    });
-};
-
-let ctx = createSecureContext();
-
-fs.watch(config.cert, (event, filename) => {
-    if (event === 'change') {
-        ctx = createSecureContext();
-    }
-});
-
-const serverOptions = {
-    requestCert: true,
-    rejectUnauthorized: true,
-    SNICallback: (servername, cb) => {
-        cb(null, ctx);
-    }
-};
-
-const server = https.createServer(serverOptions, async (req, res) => {
-    if (req.url === '/') {
-        res.writeHead(200, {'Content-Type': 'text/html'});
-
-        const {animals, error} = await requestAnimalsFromAnimalRescue();
-        console.log(animals, error);
-        if(error) {
-            res.write(`<html><body><p>Failed to retrieve animals: ${error}</body></html>`);
-        } else {
-            const animalHtmlList = animals.map(animal => `<li>${animal.name}</li>`).join('');
-            res.write(`<html><body><p>Animals available at Animal Rescue: ${animalHtmlList}</body></html>`);
-        }
-
-        res.end();
-    }
-});
-
-server.listen(5000);
-console.info('Partner Adoption Center web server is running on port 5000..');
+```bash
+functions netshoot # To show what it is
+netshoot
+curl https://partner-adoption-center.animal-rescue.svc.cluster.local
+curl https://partner-adoption-center
 ```
 
-Do a git diff and talk about the differences.
+It's time to transform our node app!
+
+1. Use the cert in the node app
+git compare with `k8s-mTLS` branch and explain the differences.
 
 1. Update service to be on port 443
 
 1. Deploy a mtls client
 
-Add `curl-mtls-client.yaml` to `external-api/k8s/kustomization.yaml`
+Add `curl-mtls-client.yaml` to `external-api/k8s/kustomization.yaml`.
+This is a simple image that uses the certs injected by autocert and periodically makes request to this URL we specified here.
 
 Verify it works in the logs
 
@@ -780,16 +626,13 @@ Verify it works in the logs
 stern curl-mtls-client
 ```
 
+Just to uncover the last bit of secret here, let's get into the container and make this curl request by hand.
+
 ```bash
 set CURL_MTLS_CLIENT (kubectl get pods -l app=curl-mtls-client -o jsonpath='{$.items[0].metadata.name}')
-k exec -it $CURL_MTLS_CLIENT -- bash
-curl https://partner-adoption-center.animal-rescue.svc.cluster.local
-curl -sS \
-       --cacert /var/run/autocert.step.sm/root.crt \
-       --cert /var/run/autocert.step.sm/site.crt \
-       --key /var/run/autocert.step.sm/site.key \
-       https://partner-adoption-center
-curl -sS \
+k exec -it $CURL_MTLS_CLIENT -- curl https://partner-adoption-center.animal-rescue.svc.cluster.local
+k exec -it $CURL_MTLS_CLIENT -- curl https://partner-adoption-center.animal-rescue.svc.cluster.local -k
+k exec -it $CURL_MTLS_CLIENT -- curl -sS \
        --cacert /var/run/autocert.step.sm/root.crt \
        --cert /var/run/autocert.step.sm/site.crt \
        --key /var/run/autocert.step.sm/site.key \
